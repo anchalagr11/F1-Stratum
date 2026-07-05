@@ -25,10 +25,11 @@ better → get it in front of people.
 *   [x] Naive persistence baseline added — proves added value (0.71 vs 1.86 MAE).
 *   [x] `build_race_state` confirmed to stamp `race_id` (the old parquet was a
     stale artifact; the backtest loads clean single races).
-*   [ ] Multi-race sweep (`--season 2024`) averaging metrics across events.
+*   [x] Multi-race sweep (`--season`) averaging metrics across cached events
+    (delivered in Sprint 5).
 
-**Acceptance:** ✅ `python -m validation.backtest` outputs a metrics table for
-any race, with a baseline comparison. *(Season sweep still open.)*
+**Acceptance:** ✅ `python -m validation.backtest [--season]` outputs a metrics
+table per race and an n-weighted aggregate, each with a baseline comparison.
 
 ## Sprint 2 — Make the Model Better (Calibration) ✅
 **Objective:** drive the POC's error metrics down using the harness as the scorer.
@@ -73,11 +74,18 @@ podium/points % and a distribution bar chart.
 **Acceptance:** repo is deploy-ready; once you deploy, a public URL + GIF finish
 this sprint.
 
-## Sprint 5 — Robustness & Polish (Stretch)
-*   [ ] Season-wide validation across ≥ 5 2024 races; report aggregate metrics.
-*   [ ] Sidebar model selector (Gemini / Claude) once multi-provider is stable.
-*   [ ] Cache warmed race data so first load of common races is instant.
-*   [ ] CI: run `tests/` + a fast backtest smoke check on push.
+## Sprint 5 — Robustness & Polish 🟡
+*   [x] **Season-wide validation** across 5 cached 2024 races (`--season`).
+    Aggregate finish-MAE **1.66** vs **1.91** baseline; wins 3/5 races. Honest
+    finding: the engine beats the baseline on average but not uniformly, and the
+    track-position `stop_penalty` generalizes imperfectly across circuits.
+*   [x] **CI** (`.github/workflows/ci.yml`): installs deps and runs `pytest` on
+    every push/PR; the synthetic calibration tests are the fast smoke check.
+*   [~] Model selector — **deliberately skipped** (per request; provider is set
+    via `STRATUM_LLM_PROVIDER`).
+*   [ ] Per-circuit `stop_penalty` calibration (the season sweep's key finding —
+    would lift cross-race pit/stop accuracy).
+*   [ ] Cache-warm common races for instant first load.
 
 ---
 

@@ -104,11 +104,36 @@ every fix was validated by re-running this harness.
 - Turns "make the model better" from guesswork into a targeted backlog (see the
   companion [Impact Sprint Plan](../IMPACT_SPRINT_PLAN.md)).
 
+## 5b. Season-wide validation (`--season`)
+
+Extending the harness across 5 cached 2024 races (decision lap 8, 69 drivers):
+
+| Race | n | Finish MAE | Baseline |
+|---|---|---|---|
+| Singapore | 20 | 0.71 | 1.86 |
+| Chinese | 16 | 1.86 | 2.14 |
+| Australian | 10 | 0.75 | 0.62 |
+| Bahrain | 19 | 2.90 | 1.80 |
+| Saudi Arabian | 4 | 2.00 | 5.00 |
+| **Aggregate (n-weighted)** | **69** | **1.66** | **1.91** |
+
+**Honest read:** the optimizer beats the naive baseline on average (1.66 < 1.91)
+and wins 3 of 5 races, but **not uniformly** — Singapore was a favourable case.
+The track-position `stop_penalty` was set for tight circuits and doesn't
+generalize perfectly (it hurts on easier-overtaking tracks like Bahrain). This
+points squarely at the next model-depth item: **per-circuit calibration** of the
+track-position term. This is exactly the kind of finding a validation harness
+exists to surface.
+
+```bash
+python -m validation.backtest --season --decision-lap 8
+```
+
 ## 6. Limitations & next steps
 
-- **Single race, single decision lap.** Extend to a multi-race sweep (the batch
-  pipeline already loads several 2024 events) and average metrics across the
-  field for a stable headline number.
+- **Per-circuit calibration.** The single global `stop_penalty` is the main
+  cross-race weakness; calibrating it (and pit-loss) per track should lift
+  aggregate pit/stop accuracy.
 - **Data hygiene:** `data/processed/historical_race_state.parquet` currently
   concatenates multiple races without a `race_id` key, so it can't be used for
   per-race grading — the backtest loads a clean single race instead. Fixing the

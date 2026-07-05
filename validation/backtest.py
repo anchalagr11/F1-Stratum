@@ -161,15 +161,65 @@ def run_backtest(year: int, gp: str, decision_lap: int, tolerance: int = 2) -> d
     return {"metrics": metrics, "detail": detail}
 
 
+# Races available in the local FastF1 cache — used by --season.
+SEASON_2024_CACHED = [
+    "Bahrain", "Saudi Arabian", "Australian", "Japanese", "Chinese", "Singapore",
+]
+
+
+def run_season(year: int, gps: list[str], decision_lap: int, tolerance: int = 2) -> None:
+    """Run the backtest across several races and aggregate the metrics."""
+    per_race = []
+    for gp in gps:
+        try:
+            m = run_backtest(year, gp, decision_lap, tolerance)["metrics"]
+            if m.get("n_drivers"):
+                per_race.append(m)
+        except Exception as exc:  # noqa: BLE001 - skip races that fail to load
+            logger.error("skip %s: %s", gp, exc)
+
+    if not per_race:
+        print("No races could be evaluated.")
+        return
+
+    def wmean(key: str) -> float:
+        pairs = [(m[key], m["n_drivers"]) for m in per_race if m.get(key) is not None]
+        w = sum(n for _, n in pairs)
+        return sum(v * n for v, n in pairs) / w if w else float("nan")
+
+    print("=" * 78)
+    print(f"STRATUM-F1 SEASON BACKTEST — {year} ({len(per_race)} races, decision lap {decision_lap})")
+    print("=" * 78)
+    print(f"{'Race':<26}{'n':>4}{'pitMAE':>9}{'±2%':>7}{'stop%':>7}{'finMAE':>8}{'baseMAE':>9}")
+    for m in per_race:
+        print(f"{m['race']:<26}{m['n_drivers']:>4}{m['pit_lap_mae']:>9}"
+              f"{m['pit_within_tol_pct']:>7}{m['stop_count_match_pct']:>7}"
+              f"{str(m['finish_mae']):>8}{str(m['baseline_finish_mae']):>9}")
+    print("-" * 78)
+    total_n = sum(m["n_drivers"] for m in per_race)
+    print(f"{'AGGREGATE (n-weighted)':<26}{total_n:>4}{wmean('pit_lap_mae'):>9.2f}"
+          f"{wmean('pit_within_tol_pct'):>7.1f}{wmean('stop_count_match_pct'):>7.1f}"
+          f"{wmean('finish_mae'):>8.2f}{wmean('baseline_finish_mae'):>9.2f}")
+    print("=" * 78)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="STRATUM-F1 strategy backtest")
     parser.add_argument("--year", type=int, default=2024)
     parser.add_argument("--gp", type=str, default="Singapore")
     parser.add_argument("--decision-lap", type=int, default=8)
     parser.add_argument("--tolerance", type=int, default=2)
+    parser.add_argument(
+        "--season", action="store_true",
+        help="Run across all cached races and aggregate metrics.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.ERROR, format="%(message)s")
+
+    if args.season:
+        run_season(args.year, SEASON_2024_CACHED, args.decision_lap, args.tolerance)
+        return
 
     out = run_backtest(args.year, args.gp, args.decision_lap, args.tolerance)
     m = out["metrics"]
