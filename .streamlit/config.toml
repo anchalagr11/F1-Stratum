@@ -1,0 +1,10 @@
+# STRATUM-F1 dashboard theme
+[theme]
+primaryColor = "#e10600"          # F1 red
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1a1d24"
+textColor = "#fafafa"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

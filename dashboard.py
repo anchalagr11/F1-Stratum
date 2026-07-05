@@ -129,6 +129,28 @@ col1.metric("Recommended stops", f"{len(best.pit_laps)}-stop")
 col2.metric("Pit lap(s)", ", ".join(map(str, best.pit_laps)))
 col3.metric("Projected finish", f"P{best.expected_finish:.0f}")
 
+# ── Uncertainty (Monte Carlo) ────────────────────────────────
+dist = optimizer.simulate_finish_distribution(
+    driver=driver,
+    decision_lap=int(decision_lap),
+    pit_laps=best.pit_laps,
+    stint_compounds=best.compounds,
+)
+st.caption(
+    f"Monte-Carlo outlook for the recommended strategy — "
+    f"finish **P{dist['mean_finish']:.1f}** "
+    f"(likely range P{dist['p10']}–P{dist['p90']})"
+)
+u1, u2, u3 = st.columns(3)
+u1.metric("Win probability", f"{dist['p_win']*100:.0f}%")
+u2.metric("Podium probability", f"{dist['p_podium']*100:.0f}%")
+u3.metric("Points probability", f"{dist['p_points']*100:.0f}%")
+finish_hist = (
+    pd.Series(dist["positions"]).value_counts(normalize=True).sort_index()
+)
+finish_hist.index = [f"P{int(p)}" for p in finish_hist.index]
+st.bar_chart(finish_hist, height=200, y_label="probability")
+
 # ── The Strategy Cliff ───────────────────────────────────────
 st.subheader("📉 The Strategy Cliff")
 st.caption(

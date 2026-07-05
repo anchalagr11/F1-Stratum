@@ -230,6 +230,7 @@ class TyreDegradationModel:
         self,
         race_state: pd.DataFrame,
         min_samples: int = 20,
+        min_r2: float = 0.10,
     ) -> dict[str, dict]:
         """Fit degradation curves from a canonical race state DataFrame.
 
@@ -284,6 +285,22 @@ class TyreDegradationModel:
                 fitted_params, r_squared = self._fit_compound(
                     compound_str, ages, residuals,
                 )
+                # Guard against degenerate fits: a low R² means the curve is
+                # dominated by noise (common on sparse compounds like SOFT with
+                # few short stints). Trusting it yields nonsensical "magic tyre"
+                # curves, so fall back to the physical default instead.
+                if r_squared < min_r2:
+                    logger.warning(
+                        "Low R² (%.3f < %.2f) for %s (n=%d) — keeping default curve",
+                        r_squared, min_r2, compound_str, len(group),
+                    )
+                    fit_results[compound_str] = {
+                        "n_samples": len(group),
+                        "r_squared": round(r_squared, 4),
+                        "kept_default": True,
+                    }
+                    continue
+
                 self.params[compound_str] = fitted_params
                 fit_results[compound_str] = {
                     "n_samples": len(group),
@@ -306,8 +323,27 @@ class TyreDegradationModel:
                     "error": str(exc),
                 }
 
+        self._enforce_compound_ordering()
         self.fitted = True
         return fit_results
+
+    def _enforce_compound_ordering(self, ref_age: float = 15.0) -> None:
+        """Ensure SOFT ≥ MEDIUM ≥ HARD degradation at a reference age.
+
+        A physically implausible ordering (e.g. a fitted SOFT that degrades
+        slower than HARD) signals a bad fit. When violated, the softer compound
+        is reverted to its default curve.
+        """
+        order = ["SOFT", "MEDIUM", "HARD"]
+        present = [c for c in order if c in self.params]
+        for softer, harder in zip(present, present[1:]):
+            if self.degradation(softer, ref_age) < self.degradation(harder, ref_age):
+                if softer in DEFAULT_COMPOUND_PARAMS:
+                    logger.warning(
+                        "%s degrades slower than %s at L%d — reverting %s to default",
+                        softer, harder, int(ref_age), softer,
+                    )
+                    self.params[softer] = DEFAULT_COMPOUND_PARAMS[softer]
 
     # ──────────────────────────────────────────────────────
     # Persistence

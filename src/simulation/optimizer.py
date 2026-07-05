@@ -34,6 +34,13 @@ MIN_STINT_LAPS: int = 5
 # Default pit-stop time loss (seconds)
 DEFAULT_PIT_LOSS: float = 22.0
 
+# Track-position penalty per stop (seconds). Pure lap-time optimization
+# ignores that rejoining after a stop often drops you into traffic you can't
+# easily pass — especially on tight circuits. This term reflects the expected
+# time lost to track position per stop, discouraging marginal extra stops the
+# way real strategists do. Ideally calibrated per circuit; 0 = pure lap time.
+DEFAULT_STOP_PENALTY: float = 10.0
+
 
 @dataclass
 class StrategyCandidate:
@@ -80,6 +87,7 @@ class PitWindowOptimizer:
         tyre_model: Optional[TyreDegradationModel] = None,
         pit_loss: float = DEFAULT_PIT_LOSS,
         noise_std: float = 0.0,
+        stop_penalty: float = DEFAULT_STOP_PENALTY,
     ) -> None:
         """Initialize the optimizer.
 
@@ -90,12 +98,15 @@ class PitWindowOptimizer:
                 Uses defaults if ``None``.
             pit_loss: Time lost per pit stop (seconds).
             noise_std: Noise for projections (0 = deterministic).
+            stop_penalty: Track-position cost per stop (seconds). Set to 0
+                for pure lap-time optimization.
         """
         self.race_state = race_state.copy()
         self.total_laps = int(race_state["lap"].max())
         self.tyre_model = tyre_model or TyreDegradationModel()
         self.pit_loss = pit_loss
         self.noise_std = noise_std
+        self.stop_penalty = stop_penalty
         logger.info(
             "PitWindowOptimizer initialized — %d laps, pit_loss=%.1fs",
             self.total_laps, self.pit_loss,
@@ -328,6 +339,64 @@ class PitWindowOptimizer:
 
         return results
 
+    def simulate_finish_distribution(
+        self,
+        driver: str,
+        decision_lap: int,
+        pit_laps: list[int],
+        stint_compounds: list[str],
+        n_runs: int = 5000,
+        lap_noise: float = 0.4,
+    ) -> dict:
+        """Monte-Carlo finish-position distribution for one strategy.
+
+        Projects the driver's strategy and each rival's nominal stop, then
+        samples total race times with per-lap Gaussian noise (independent per
+        lap, so total std scales with sqrt(remaining laps)). Returns win /
+        podium / points probabilities and a P10–P90 finishing range — the kind
+        of probabilistic call a real pit wall makes instead of a point estimate.
+
+        Args:
+            driver: Target driver.
+            decision_lap: Current lap.
+            pit_laps: Pit laps of the strategy to evaluate.
+            stint_compounds: Compound per stint (len = stops + 1).
+            n_runs: Number of Monte-Carlo samples.
+            lap_noise: Per-lap time noise std (seconds).
+
+        Returns:
+            Dict with p_win, p_podium, p_points, mean_finish, p10, p90, positions.
+        """
+        remaining = max(1, self.total_laps - decision_lap)
+        state = self._get_driver_state(driver, decision_lap)
+        baseline = self._get_baseline_pace(driver, decision_lap)
+        age = float(state["tyre_age"].iloc[0])
+        compound = str(state["compound"].iloc[0])
+
+        my_mean = self._project_strategy_time(
+            baseline_pace=baseline, current_age=age, current_compound=compound,
+            decision_lap=decision_lap, pit_laps=pit_laps,
+            stint_compounds=stint_compounds,
+        )
+        rival_means = self._project_others_total(driver, decision_lap)
+
+        std = lap_noise * np.sqrt(remaining)
+        rng = np.random.default_rng(0)
+        my = rng.normal(my_mean, std, n_runs)
+        positions = np.ones(n_runs, dtype=int)
+        for rm in rival_means:
+            positions += (rng.normal(rm, std, n_runs) < my)
+
+        return {
+            "p_win": float((positions == 1).mean()),
+            "p_podium": float((positions <= 3).mean()),
+            "p_points": float((positions <= 10).mean()),
+            "mean_finish": float(positions.mean()),
+            "p10": int(np.percentile(positions, 10)),
+            "p90": int(np.percentile(positions, 90)),
+            "positions": positions,
+        }
+
     def summary_table(
         self,
         candidates: list[StrategyCandidate],
@@ -400,7 +469,7 @@ class PitWindowOptimizer:
             # Reset tyre age after pit stops (except first stint)
             if stint_idx > 0:
                 tyre_age = 1.0
-                total += self.pit_loss  # add pit time loss
+                total += self.pit_loss + self.stop_penalty  # pit + track-position cost
 
             for lap_offset in range(stint_length):
                 deg = self.tyre_model.degradation(compound, tyre_age)
@@ -431,8 +500,15 @@ class PitWindowOptimizer:
         Returns:
             List of projected totals for each other driver.
         """
-        remaining = self.total_laps - decision_lap
         totals: list[float] = []
+
+        # Rivals are assumed to run a realistic single stop (pitting near the
+        # midpoint of the remaining race onto a durable compound), not to stay
+        # out the whole way. Projecting them as never pitting made every rival
+        # absurdly slow and collapsed the target's estimated finish to P1.
+        nominal_pit = int((decision_lap + self.total_laps) / 2)
+        nominal_pit = max(decision_lap + MIN_STINT_LAPS,
+                          min(nominal_pit, self.total_laps - MIN_STINT_LAPS))
 
         for drv in self.race_state["driver"].unique():
             if drv == exclude_driver:
@@ -450,8 +526,8 @@ class PitWindowOptimizer:
                 current_age=age,
                 current_compound=compound,
                 decision_lap=decision_lap,
-                pit_laps=[],
-                stint_compounds=[compound],
+                pit_laps=[nominal_pit],
+                stint_compounds=[compound, "HARD"],
             )
             totals.append(time)
 
