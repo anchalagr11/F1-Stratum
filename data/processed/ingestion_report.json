@@ -1,0 +1,55 @@
+{
+  "started_at": "2026-03-25T10:31:45.325179",
+  "completed_at": "2026-03-25T10:37:50.168668",
+  "total_requested": 5,
+  "succeeded": 5,
+  "skipped": 0,
+  "failed": 0,
+  "results": [
+    {
+      "year": 2024,
+      "gp": "Bahrain",
+      "race_id": "2024_bahrain",
+      "status": "success",
+      "laps_count": 1129,
+      "error": null,
+      "elapsed_sec": 39.68
+    },
+    {
+      "year": 2024,
+      "gp": "Saudi Arabia",
+      "race_id": "2024_saudi_arabia",
+      "status": "success",
+      "laps_count": 901,
+      "error": null,
+      "elapsed_sec": 36.54
+    },
+    {
+      "year": 2024,
+      "gp": "Australia",
+      "race_id": "2024_australia",
+      "status": "success",
+      "laps_count": 998,
+      "error": null,
+      "elapsed_sec": 55.82
+    },
+    {
+      "year": 2024,
+      "gp": "Japan",
+      "race_id": "2024_japan",
+      "status": "success",
+      "laps_count": 907,
+      "error": null,
+      "elapsed_sec": 118.26
+    },
+    {
+      "year": 2024,
+      "gp": "China",
+      "race_id": "2024_china",
+      "status": "success",
+      "laps_count": 1032,
+      "error": null,
+      "elapsed_sec": 114.53
+    }
+  ]
+}

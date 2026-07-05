@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Cache
+.fastf1_cache/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Scratch / temp
+scratch/
+
+# Claude config
+.claude/
