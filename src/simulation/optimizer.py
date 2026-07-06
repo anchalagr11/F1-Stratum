@@ -41,6 +41,13 @@ DEFAULT_PIT_LOSS: float = 22.0
 # way real strategists do. Ideally calibrated per circuit; 0 = pure lap time.
 DEFAULT_STOP_PENALTY: float = 10.0
 
+# Reduced pit-lane loss when the field is slowed. Under a Safety Car / VSC the
+# whole field runs slowly, so the *relative* time lost pitting collapses — which
+# is why ~half of real F1 stops happen under caution. Modelling this is the
+# single biggest step toward realistic pit-timing.
+SC_PIT_LOSS: float = 10.0    # full Safety Car (track status contains '4')
+VSC_PIT_LOSS: float = 14.0   # Virtual Safety Car (status contains '6'/'7')
+
 
 @dataclass
 class StrategyCandidate:
@@ -88,6 +95,7 @@ class PitWindowOptimizer:
         pit_loss: float = DEFAULT_PIT_LOSS,
         noise_std: float = 0.0,
         stop_penalty: float = DEFAULT_STOP_PENALTY,
+        sc_aware: bool = True,
     ) -> None:
         """Initialize the optimizer.
 
@@ -100,6 +108,8 @@ class PitWindowOptimizer:
             noise_std: Noise for projections (0 = deterministic).
             stop_penalty: Track-position cost per stop (seconds). Set to 0
                 for pure lap-time optimization.
+            sc_aware: If True, pitting on a lap run under Safety Car / VSC uses
+                the reduced pit loss and waives the track-position penalty.
         """
         self.race_state = race_state.copy()
         self.total_laps = int(race_state["lap"].max())
@@ -107,6 +117,8 @@ class PitWindowOptimizer:
         self.pit_loss = pit_loss
         self.noise_std = noise_std
         self.stop_penalty = stop_penalty
+        self.sc_aware = sc_aware
+        self._lap_status = self._build_lap_status(race_state)
         logger.info(
             "PitWindowOptimizer initialized — %d laps, pit_loss=%.1fs",
             self.total_laps, self.pit_loss,
@@ -155,7 +167,7 @@ class PitWindowOptimizer:
         )
 
         candidates: list[StrategyCandidate] = []
-        other_totals = self._project_others_total(driver, decision_lap)
+        other_totals = self._project_others_total(driver, decision_lap, apply_sc=False)
 
         for pit_lap in range(earliest, latest + 1):
             for post_compound in compounds:
@@ -171,7 +183,10 @@ class PitWindowOptimizer:
                 )
                 stint_1 = pit_lap - decision_lap
                 stint_2 = self.total_laps - pit_lap
-                expected_finish = self._estimate_position(total_time, other_totals)
+                # Position is estimated on a caution-neutral basis so a car isn't
+                # promoted purely for taking a cheap Safety-Car stop.
+                green_total = total_time + self._caution_savings([pit_lap])
+                expected_finish = self._estimate_position(green_total, other_totals)
                 risk = self._compute_risk(
                     stint_lengths=[stint_1, stint_2],
                     compounds=[current_compound, post_compound],
@@ -241,7 +256,7 @@ class PitWindowOptimizer:
         )
 
         candidates: list[StrategyCandidate] = []
-        other_totals = self._project_others_total(driver, decision_lap)
+        other_totals = self._project_others_total(driver, decision_lap, apply_sc=False)
 
         for pit1 in range(earliest, latest + 1, step):
             for pit2 in range(pit1 + MIN_STINT_LAPS, latest + 1, step):
@@ -263,7 +278,8 @@ class PitWindowOptimizer:
                         stint_2 = pit2 - pit1
                         stint_3 = self.total_laps - pit2
 
-                        expected_finish = self._estimate_position(total_time, other_totals)
+                        green_total = total_time + self._caution_savings([pit1, pit2])
+                        expected_finish = self._estimate_position(green_total, other_totals)
                         risk = self._compute_risk(
                             stint_lengths=[stint_1, stint_2, stint_3],
                             compounds=stint_compounds,
@@ -373,12 +389,14 @@ class PitWindowOptimizer:
         age = float(state["tyre_age"].iloc[0])
         compound = str(state["compound"].iloc[0])
 
+        # Caution-neutral totals so the finish distribution matches the
+        # position estimate (a car isn't flattered for a cheap SC stop).
         my_mean = self._project_strategy_time(
             baseline_pace=baseline, current_age=age, current_compound=compound,
             decision_lap=decision_lap, pit_laps=pit_laps,
-            stint_compounds=stint_compounds,
+            stint_compounds=stint_compounds, apply_sc=False,
         )
-        rival_means = self._project_others_total(driver, decision_lap)
+        rival_means = self._project_others_total(driver, decision_lap, apply_sc=False)
 
         std = lap_noise * np.sqrt(remaining)
         rng = np.random.default_rng(0)
@@ -395,6 +413,81 @@ class PitWindowOptimizer:
             "p10": int(np.percentile(positions, 10)),
             "p90": int(np.percentile(positions, 90)),
             "positions": positions,
+        }
+
+    def evaluate_undercut(
+        self,
+        driver: str,
+        decision_lap: int,
+        rival: Optional[str] = None,
+        new_compound: str = "HARD",
+        response_laps: int = 2,
+    ) -> dict:
+        """Assess whether ``driver`` can undercut a rival ahead.
+
+        Real strategy is relative, not absolute: the question is not "what's my
+        fastest race" but "if I pit now and they don't, do I come out *ahead of
+        them*?" This models the classic undercut — the time a driver banks on
+        fresh tyres over the laps until the rival responds — versus the current
+        gap.
+
+        Args:
+            driver: The attacking driver.
+            decision_lap: Current lap.
+            rival: Car to undercut. Defaults to the car directly ahead.
+            new_compound: Compound the driver would fit.
+            response_laps: Laps until the rival is assumed to pit in response.
+
+        Returns:
+            Dict with the rival, gap, projected undercut gain, net margin, and a
+            verdict ("UNDERCUT" if the driver emerges ahead, else "HOLD").
+        """
+        lap_frame = self.race_state[self.race_state["lap"] == decision_lap]
+        drow = lap_frame[lap_frame["driver"] == driver]
+        if drow.empty:
+            raise ValueError(f"No data for {driver} on lap {decision_lap}")
+        drow = drow.iloc[0]
+        pos = int(drow["position"])
+
+        if rival is None:
+            ahead = lap_frame[lap_frame["position"] == pos - 1]
+            if ahead.empty:
+                return {"verdict": "N/A", "reason": "Race leader — no car ahead to undercut."}
+            rrow = ahead.iloc[0]
+            gap_s = float(drow.get("gap_ahead", float("nan")))
+        else:
+            rr = lap_frame[lap_frame["driver"] == rival]
+            if rr.empty:
+                raise ValueError(f"No data for rival {rival} on lap {decision_lap}")
+            rrow = rr.iloc[0]
+            rpos = int(rrow["position"])
+            if rpos >= pos:
+                return {"verdict": "N/A", "reason": f"{rival} is not ahead of {driver}."}
+            # Cumulative gap = sum of gap_ahead across the cars between them.
+            between = lap_frame[(lap_frame["position"] > rpos) & (lap_frame["position"] <= pos)]
+            gap_s = float(between["gap_ahead"].sum())
+
+        rival_name = str(rrow["driver"])
+        rival_comp = str(rrow.get("compound", "MEDIUM"))
+        rival_age = float(rrow.get("tyre_age", 10.0))
+
+        # Time the driver gains per lap on fresh rubber vs the rival's aging set.
+        gain = 0.0
+        for i in range(1, response_laps + 1):
+            rival_pen = self.tyre_model.degradation(rival_comp, rival_age + i)
+            my_pen = self.tyre_model.degradation(new_compound, i)
+            fresh = self.tyre_model.fresh_tyre_advantage(new_compound) * max(0.0, 1.0 - (i - 1) / 10.0)
+            gain += rival_pen - my_pen + fresh
+
+        net = gain - (gap_s if gap_s == gap_s else 0.0)  # NaN-safe
+        return {
+            "rival": rival_name,
+            "gap_s": round(gap_s, 2) if gap_s == gap_s else None,
+            "undercut_gain_s": round(gain, 2),
+            "net_s": round(net, 2),
+            "response_laps": response_laps,
+            "new_compound": new_compound,
+            "verdict": "UNDERCUT" if net > 0 else "HOLD",
         }
 
     def summary_table(
@@ -436,6 +529,7 @@ class PitWindowOptimizer:
         decision_lap: int,
         pit_laps: list[int],
         stint_compounds: list[str],
+        apply_sc: bool = True,
     ) -> float:
         """Project total remaining race time for a multi-stint strategy.
 
@@ -449,6 +543,10 @@ class PitWindowOptimizer:
             decision_lap: Lap at which the decision is made.
             pit_laps: Ordered list of pit lap numbers.
             stint_compounds: Compound for each stint (len = stops + 1).
+            apply_sc: If True, use reduced Safety-Car/VSC pit cost where it
+                applies. Set False for a caution-neutral (steady-state) total —
+                used for finishing-position estimation so a car isn't flattered
+                purely for taking a cheap stop.
 
         Returns:
             Total projected time for the remaining race (seconds).
@@ -469,7 +567,14 @@ class PitWindowOptimizer:
             # Reset tyre age after pit stops (except first stint)
             if stint_idx > 0:
                 tyre_age = 1.0
-                total += self.pit_loss + self.stop_penalty  # pit + track-position cost
+                # Pit lap is the boundary that opened this stint. Under a Safety
+                # Car / VSC the loss shrinks and track position is preserved.
+                pit_lap = boundaries[stint_idx]
+                if apply_sc:
+                    loss, under_caution = self._pit_cost_for_lap(pit_lap)
+                    total += loss + (0.0 if under_caution else self.stop_penalty)
+                else:
+                    total += self.pit_loss + self.stop_penalty
 
             for lap_offset in range(stint_length):
                 deg = self.tyre_model.degradation(compound, tyre_age)
@@ -490,12 +595,15 @@ class PitWindowOptimizer:
         self,
         exclude_driver: str,
         decision_lap: int,
+        apply_sc: bool = True,
     ) -> list[float]:
-        """Project total remaining time for other drivers (stay-out).
+        """Project total remaining time for other drivers (single nominal stop).
 
         Args:
             exclude_driver: Driver to exclude.
             decision_lap: Current lap number.
+            apply_sc: Pass False for a caution-neutral baseline (used for
+                finishing-position estimation).
 
         Returns:
             List of projected totals for each other driver.
@@ -528,6 +636,7 @@ class PitWindowOptimizer:
                 decision_lap=decision_lap,
                 pit_laps=[nominal_pit],
                 stint_compounds=[compound, "HARD"],
+                apply_sc=apply_sc,
             )
             totals.append(time)
 
@@ -593,6 +702,49 @@ class PitWindowOptimizer:
                 risk += 0.10
 
         return min(1.0, max(0.0, risk))
+
+    @staticmethod
+    def _build_lap_status(race_state: pd.DataFrame) -> dict[int, set]:
+        """Map each lap to the set of track-status codes seen that lap.
+
+        Track status is a per-lap concatenation of codes (e.g. '124' = green +
+        yellow + safety car). We aggregate across drivers so a lap is flagged
+        under caution if any car recorded that status.
+        """
+        status: dict[int, set] = {}
+        if "track_status" not in race_state.columns:
+            return status
+        for lap, grp in race_state.groupby("lap"):
+            chars = set("".join(grp["track_status"].dropna().astype(str)))
+            status[int(lap)] = chars
+        return status
+
+    def _pit_cost_for_lap(self, lap: int) -> tuple[float, bool]:
+        """Return (pit_loss, under_caution) for pitting on a given lap.
+
+        Under Safety Car / VSC the pit loss shrinks and the track-position
+        penalty no longer applies (the field is bunched, so you don't lose
+        positions by pitting).
+        """
+        if not self.sc_aware:
+            return self.pit_loss, False
+        chars = self._lap_status.get(int(lap), set())
+        if "4" in chars:              # full Safety Car
+            return SC_PIT_LOSS, True
+        if "6" in chars or "7" in chars:  # Virtual Safety Car
+            return VSC_PIT_LOSS, True
+        return self.pit_loss, False
+
+    def _caution_savings(self, pit_laps: list[int]) -> float:
+        """Total seconds saved by pitting under caution vs. green for these laps."""
+        if not self.sc_aware:
+            return 0.0
+        saved = 0.0
+        for pl in pit_laps:
+            loss, caution = self._pit_cost_for_lap(pl)
+            if caution:
+                saved += (self.pit_loss + self.stop_penalty) - loss
+        return saved
 
     def _get_driver_state(self, driver: str, lap: int) -> pd.DataFrame:
         """Retrieve driver state at a specific lap."""

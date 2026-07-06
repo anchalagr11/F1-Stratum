@@ -151,6 +151,26 @@ finish_hist = (
 finish_hist.index = [f"P{int(p)}" for p in finish_hist.index]
 st.bar_chart(finish_hist, height=200, y_label="probability")
 
+# ── Rival undercut check ─────────────────────────────────────
+st.subheader("🎯 Undercut check — vs the car ahead")
+uc = optimizer.evaluate_undercut(driver, int(decision_lap))
+if uc.get("verdict") == "N/A":
+    st.caption(uc.get("reason", "No undercut target."))
+else:
+    gap_txt = f"{uc['gap_s']:.1f}s" if uc.get("gap_s") is not None else "n/a"
+    if uc["verdict"] == "UNDERCUT":
+        st.success(
+            f"**Undercut on {uc['rival']} is ON** — pitting now onto {uc['new_compound']} "
+            f"nets ~{uc['net_s']:.1f}s over {uc['response_laps']} laps "
+            f"(fresh-tyre gain {uc['undercut_gain_s']:.1f}s vs a {gap_txt} gap)."
+        )
+    else:
+        st.info(
+            f"**Hold vs {uc['rival']}** — the undercut gains only "
+            f"{uc['undercut_gain_s']:.1f}s, not enough to clear the {gap_txt} gap "
+            f"(net {uc['net_s']:.1f}s)."
+        )
+
 # ── The Strategy Cliff ───────────────────────────────────────
 st.subheader("📉 The Strategy Cliff")
 st.caption(

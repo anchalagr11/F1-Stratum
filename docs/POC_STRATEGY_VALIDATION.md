@@ -119,15 +119,30 @@ Extending the harness across 5 cached 2024 races (decision lap 8, 69 drivers):
 
 **Honest read:** the optimizer beats the naive baseline on average (1.66 < 1.91)
 and wins 3 of 5 races, but **not uniformly** — Singapore was a favourable case.
-The track-position `stop_penalty` was set for tight circuits and doesn't
-generalize perfectly (it hurts on easier-overtaking tracks like Bahrain). This
-points squarely at the next model-depth item: **per-circuit calibration** of the
-track-position term. This is exactly the kind of finding a validation harness
-exists to surface.
 
 ```bash
 python -m validation.backtest --season --decision-lap 8
 ```
+
+### Modelling what actually decides races (Safety-Car / VSC + undercut)
+
+Real pit calls are dominated by **Safety Cars** (pit loss collapses from ~22s to
+~10s under caution) and by **rival-relative undercuts**, neither of which pure
+lap-time optimization captures. Adding both:
+
+| Season aggregate (69 drivers) | Before | With SC/VSC model |
+|---|---|---|
+| Pit-lap within ±2 laps | 11.6% | **15.9%** |
+| Stop-count match | 36.2% | **43.5%** |
+| Finish MAE | 1.66 | 1.69 (still < 1.91 baseline) |
+| Australian GP pit-lap MAE | 11.9 | **4.9** |
+
+The Safety-Car model sharply improves *when-to-pit* accuracy on caution-affected
+races (Australia's SC stop is now correctly recommended). Finishing position is
+estimated on a **caution-neutral** basis so a car isn't flattered merely for
+taking a cheap stop — which kept finish-MAE flat while pit-timing improved.
+Remaining gap (per-circuit `stop_penalty` calibration) is the next model-depth
+item.
 
 ## 6. Limitations & next steps
 

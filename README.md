@@ -8,8 +8,9 @@ with Monte-Carlo probabilities, and has an LLM race engineer reason over the
 result — all in an interactive dashboard.
 
 > **What makes it different:** most F1 projects *visualize* strategy. STRATUM-F1
-> *optimizes* it and then **validates** those recommendations against what teams
-> actually did — see the numbers below.
+> *optimizes* it — accounting for the things that actually decide races
+> (**Safety-Car/VSC pit windows** and **rival-relative undercuts**) — and then
+> **validates** those recommendations against what teams actually did.
 
 ---
 
@@ -108,7 +109,7 @@ stratum-f1/
 | `src.ingestion` | Load F1 sessions via FastF1; persist parquet |
 | `src.canonical` | Canonical race state (one row per driver × lap) |
 | `src.features` | Strategy features (traffic, undercut, pit loss) |
-| `src.simulation` | Fitted tyre model, simulator, pit-window optimizer + Monte-Carlo |
+| `src.simulation` | Fitted tyre model, simulator, pit-window optimizer + Monte-Carlo, **Safety-Car/VSC-aware pit costs**, **rival undercut analysis** |
 | `src.llm` | Race-briefing builder and live LLM reasoning (Gemini/Claude) |
 | `src.api` | FastAPI `/strategy` and `/health` endpoints |
 | `validation` | Backtest that grades the optimizer vs. reality |
