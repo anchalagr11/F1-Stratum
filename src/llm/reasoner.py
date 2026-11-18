@@ -23,6 +23,20 @@ DEFAULT_MODEL = "claude-opus-4-8"
 # Override with the STRATUM_LLM_PROVIDER environment variable.
 DEFAULT_PROVIDER = "gemini"
 
+
+def load_env() -> None:
+    """Load API keys from a local ``.env`` file if present.
+
+    Keeps secrets out of the shell/environment setup and out of git (``.env``
+    is gitignored). A no-op if python-dotenv isn't installed or no file exists.
+    Existing environment variables are not overridden.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # pragma: no cover - optional dependency
+        return
+    load_dotenv(override=False)
+
 DEFAULT_SYSTEM_PROMPT = (
     "You are an expert Formula 1 Race Strategist embedded on the pit wall. "
     "You have exact knowledge of the tyre degradation curves and access to a "
@@ -77,6 +91,7 @@ class StrategyReasoner:
     @staticmethod
     def _build_client():
         """Construct the Anthropic client, raising a clear error if unavailable."""
+        load_env()
         try:
             import anthropic
         except ImportError as exc:  # pragma: no cover - env dependent

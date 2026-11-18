@@ -53,6 +53,8 @@ class GeminiReasoner:
     @staticmethod
     def _build_client():
         """Construct the Gemini client, raising a clear error if unavailable."""
+        from .reasoner import load_env
+        load_env()
         try:
             from google import genai
         except ImportError as exc:  # pragma: no cover - env dependent
