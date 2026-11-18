@@ -36,8 +36,22 @@ python -m validation.backtest --year 2024 --gp Singapore --decision-lap 8
 ## Pipeline
 
 ```
-FastF1 ingest → canonical race state → strategy features →
-  tyre model (fitted) → pit-window optimizer → Monte-Carlo outcome → LLM briefing
+   FastF1 telemetry
+         │
+         ▼
+   Canonical race state  →  strategy features
+         │
+         ▼
+   Tyre degradation model        (fitted per race)
+         │
+         ▼
+   Pit-window optimizer  →  Monte-Carlo outcome
+         │
+         ▼
+   LLM race briefing
+         │
+         ▼
+   ★ Grounding check     ← every claim verified against the simulation
 ```
 
 ## Quick start

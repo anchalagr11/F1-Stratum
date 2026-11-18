@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# The real unit/integration suite lives in tests/. The repo-root `test_api.py`
+# is a manual smoke script that POSTs to a running server (localhost:8000) at
+# import time, so it is not a collectable unit test — scope collection to tests/.
+testpaths = ["tests"]
